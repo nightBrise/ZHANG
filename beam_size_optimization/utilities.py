@@ -217,6 +217,70 @@ def set_device_values(pvs, values):
     caput_many(pvs, values)
     time.sleep(0.1)  # 等待设备响应
 
+def get_current_values(device_pvs, timeout=2.0):
+    """
+    安全获取当前设备参数值
+    
+    Args:
+        device_pvs: 设备PV列表
+        timeout: 单个PV读取超时时间(秒)
+        
+    Returns:
+        list: 设备当前值列表
+    """
+    try:
+        # 首先尝试批量获取
+        values = caget_many(device_pvs, timeout=timeout)
+        
+        # 检查是否有None值，如有则逐个重试
+        if None in values:
+            print("Warning: Some PV values returned None in batch read, retrying individually")
+            values = []
+            for pv in device_pvs:
+                value = None
+                # 尝试最多3次
+                for attempt in range(3):
+                    try:
+                        value = caget(pv, timeout=timeout)
+                        if value is not None:
+                            break
+                    except Exception as e:
+                        print(f"Attempt {attempt+1} failed for {pv}: {e}")
+                    time.sleep(0.1)  # 短暂等待后重试
+                
+                if value is None:
+                    print(f"Warning: Could not read value for {pv} after 3 attempts")
+                values.append(value)
+        
+        return values
+        
+    except Exception as e:
+        print(f"Error in get_current_values: {e}")
+        return [None] * len(device_pvs)
+
+def safe_clamp_value(value, bounds):
+    """
+    安全限制值在边界内
+    
+    Args:
+        value: 要限制的值
+        bounds: (lower, upper)边界元组
+        
+    Returns:
+        float: 限制后的值
+    """
+    if value is None:
+        return (bounds[0] + bounds[1]) / 2
+    
+    lower, upper = bounds
+    if value < lower:
+        print(f"  Value {value:.4f} below lower bound {lower:.4f}, clamping to {lower:.4f}")
+        return lower
+    elif value > upper:
+        print(f"  Value {value:.4f} above upper bound {upper:.4f}, clamping to {upper:.4f}")
+        return upper
+    return value
+
 # -------------------------------------
 # 安全检查
 # -------------------------------------

@@ -259,6 +259,14 @@ class EPICSSimulator:
         if wait:
             time.sleep(0.1 * len(pvs))  # 等待所有设备响应
 
+    def get_current_values(device_pvs):
+        """模拟获取当前设备参数值"""
+        values = []
+        for pv in device_pvs:
+            value = caget(pv)
+            values.append(value if value is not None else 0.0)
+        return values
+
 # 创建全局模拟器实例
 _simulator = EPICSSimulator()
 

@@ -11,54 +11,94 @@ def load_config(config_file='config.json'):
     with open(config_file, 'r') as f:
         return json.load(f)
 
-def select_optimization_devices(config, device_types=None, device_pvs=None):
+def select_optimization_devices(config, device_types=None, device_pvs=None, use_default_fallback=True):
     """
-    选择参与优化的设备
+    选择参与优化的设备，从EPICS获取当前值作为初始值
     
     Args:
         config: 配置字典
-        device_types: 要选择的设备类型列表，如 ['quadrupoles', 'correctors']
+        device_types: 要选择的设备类型列表
         device_pvs: 要选择的具体设备PV列表
+        use_default_fallback: 当EPICS读取失败时是否使用默认值
         
     Returns:
-        tuple: (设备PV列表, 初始值列表, 边界列表)
+        tuple: (设备PV列表, 当前值列表, 边界列表)
     """
     selected_devices = []
     
+    # 1. 选择设备
     if device_pvs is not None:
         # 按PV精确选择
         for pv in device_pvs:
+            found = False
             for device_type, devices in config['devices'].items():
                 for device in devices:
                     if device['pv'] == pv:
-                        selected_devices.append((pv, device['init'], device['range']))
+                        selected_devices.append((pv, device['range']))
+                        found = True
                         break
+                if found:
+                    break
+            if not found:
+                print(f"WARNING: PV {pv} not found in config")
     
     elif device_types is not None:
         # 按类型选择
         for device_type in device_types:
             if device_type in config['devices']:
                 for device in config['devices'][device_type]:
-                    selected_devices.append((device['pv'], device['init'], device['range']))
+                    selected_devices.append((device['pv'], device['range']))
+            else:
+                print(f"WARNING: Device type {device_type} not found in config")
     
     else:
         # 选择所有设备
         for device_type, devices in config['devices'].items():
             for device in devices:
-                selected_devices.append((device['pv'], device['init'], device['range']))
+                selected_devices.append((device['pv'], device['range']))
     
     if not selected_devices:
         raise ValueError("No devices selected for optimization")
     
     device_pvs = [d[0] for d in selected_devices]
-    initial_values = [d[1] for d in selected_devices]
-    bounds = [d[2] for d in selected_devices]
+    bounds = [d[1] for d in selected_devices]
     
-    print(f"Selected {len(device_pvs)} devices for optimization:")
-    for i, (pv, init, bound) in enumerate(zip(device_pvs, initial_values, bounds)):
-        print(f"  {i+1}. {pv}: init={init}, bounds={bound}")
+    # 2. 从EPICS获取当前值
+    print("\nReading current values from EPICS...")
+    current_values = []
     
-    return device_pvs, initial_values, bounds
+    # 等待束流稳定
+    if not wait_for_stable_beam(
+        timeout=10,
+        spark_pv=config['safety']['spark_pv'],
+        beam_status_pv=config['safety']['beam_status_pv']
+    ):
+        print("WARNING: Beam unstable, but continuing to read values")
+    
+    # 获取当前值
+    raw_values = get_current_values(device_pvs)
+    
+    # 3. 处理和验证值
+    for i, (pv, raw_value, bound) in enumerate(zip(device_pvs, raw_values, bounds)):
+        if raw_value is None:
+            if use_default_fallback:
+                # 使用边界中点作为回退值
+                fallback_value = (bound[0] + bound[1]) / 2
+                print(f"  WARNING: Could not read {pv}, using fallback value: {fallback_value:.4f}")
+                current_values.append(fallback_value)
+            else:
+                raise ValueError(f"Could not read value for {pv} and no fallback allowed")
+        else:
+            # 确保值在边界内
+            clamped_value = safe_clamp_value(raw_value, bound)
+            current_values.append(clamped_value)
+    
+    # 4. 打印结果
+    print(f"\nSelected {len(device_pvs)} devices for optimization:")
+    for i, (pv, current_val, bound) in enumerate(zip(device_pvs, current_values, bounds)):
+        print(f"  {i+1}. {pv}: current={current_val:.4f}, bounds={bound}")
+    
+    return device_pvs, current_values, bounds
 
 def objective_function(params_dict, device_pvs, config):
     """
@@ -114,7 +154,7 @@ def objective_function(params_dict, device_pvs, config):
     
     return size
 
-def optimize_beam(config, algorithm='NGOpt', budget=50, num_workers=1, device_types=None, device_pvs=None):
+def optimize_beam(config, algorithm='NGOpt', budget=50, device_types=None, device_pvs=None):
     """
     执行束流优化
     
@@ -127,62 +167,55 @@ def optimize_beam(config, algorithm='NGOpt', budget=50, num_workers=1, device_ty
             - 'CMA': 中等维度，低噪声
             - 'PSO': 高鲁棒性
         budget: 优化迭代次数
-        num_workers: 并行工作线程数 (1表示顺序执行)
         device_types: 要优化的设备类型列表
         device_pvs: 要优化的具体设备PV列表
         
     Returns:
         tuple: (最佳参数, 最佳尺寸, 设备PV列表, 优化历史)
     """
-    # 选择参与优化的设备
-    device_pvs, initial_values, bounds = select_optimization_devices(config, device_types, device_pvs)
+    # 选择参与优化的设备，获取当前值
+    device_pvs, current_values, bounds = select_optimization_devices(
+        config, 
+        device_types, 
+        device_pvs,
+        use_default_fallback=True
+    )
     
     # 定义参数空间
     parametrization = ng.p.Instrumentation(
-        **{f"x{i}": ng.p.Scalar(init=initial_values[i], lower=bounds[i][0], upper=bounds[i][1]) 
+        **{f"x{i}": ng.p.Scalar(init=current_values[i], lower=bounds[i][0], upper=bounds[i][1]) 
            for i in range(len(device_pvs))}
     )
     
-    # 初始化优化器 - 遵循Nevergrad最佳实践
+    # 初始化优化器
     try:
-        # 获取优化器类
         optimizer_class = ng.optimizers.registry[algorithm]
     except KeyError:
-        print(f"警告: 算法 '{algorithm}' 未在Nevergrad注册表中找到。")
-        available_algorithms = sorted(ng.optimizers.registry.keys())
-        print(f"可用算法: {', '.join(available_algorithms[:10])}...")
-        print("使用默认算法 'NGOpt'")
-        optimizer_class = ng.optimizers.NGOpt
+        print(f"Algorithm {algorithm} not found in nevergrad registry. Using default TBPSA.")
+        optimizer_class = ng.optimizers.TBPSA
     
-    # 创建优化器实例
     optimizer = optimizer_class(
         parametrization=parametrization,
         budget=budget,
-        num_workers=num_workers,
+        num_workers=1
     )
-
-    # 打印优化器信息
-    print(f"使用优化器: {algorithm}")
-    print(f"预算: {budget} 次迭代")
-    print(f"并行工作线程: {num_workers}")
     
     # 优化历史记录
     optimization_history = {
         'iterations': [],
-        'parameters': [],  # 每次迭代的参数
-        'values': [],      # 每次迭代的目标函数值
-        'valid_values': [], # 初始点
-        'initial_values': initial_values.copy(),
+        'parameters': [],
+        'values': [],
+        'valid_values': [],
+        'initial_values': current_values.copy(),  # 使用当前值作为初始值
         'device_pvs': device_pvs.copy(),
         'algorithm': algorithm,
         'budget': budget,
-        'num_workers': num_workers
-    } 
+    }
     
     # 评估初始点
-    print("Setting initial parameters safely...")
-    initial_params_dict = {f"x{i}": initial_values[i] for i in range(len(initial_values))}
-    safe_device_operation(device_pvs, initial_values, config['safety'])
+    print("\nSetting initial parameters safely...")
+    initial_params_dict = {f"x{i}": current_values[i] for i in range(len(current_values))}
+    safe_device_operation(device_pvs, current_values, config['safety'])
     initial_size = objective_function(initial_params_dict, device_pvs, config)
     print(f"Initial beam size: {initial_size:.4f}")
     
@@ -191,7 +224,7 @@ def optimize_beam(config, algorithm='NGOpt', budget=50, num_workers=1, device_ty
         optimization_history['valid_values'].append(initial_size)
     
     # 执行优化 - 使用 ask-and-tell 接口
-    print(f"\n开始优化: {algorithm} 算法, {budget} 次迭代...")
+    print(f"\nStarting optimization: {algorithm} algorithm, {budget} iterations...")
     start_time = time.time()
     
     for i in range(budget):
@@ -204,7 +237,7 @@ def optimize_beam(config, algorithm='NGOpt', budget=50, num_workers=1, device_ty
             
             # 3. 检查值是否有效
             if np.isinf(value) or np.isnan(value):
-                print(f"  警告: 迭代 {i+1} 目标函数返回无效值 {value}")
+                print(f"WARNING: Iteration {i+1} returned an invalid objective function value: {value}")
                 # 使用大惩罚值继续优化
                 value = float('inf')
             
@@ -222,11 +255,11 @@ def optimize_beam(config, algorithm='NGOpt', budget=50, num_workers=1, device_ty
                 elapsed = time.time() - start_time
                 est_total = elapsed / (i+1) * budget if i > 0 else elapsed * budget
                 remaining = max(0, est_total - elapsed)
-                print(f"迭代 {i+1}/{budget}: 尺寸={value:.4f}, "
-                      f"耗时={elapsed:.1f}s, 预计剩余={remaining:.1f}s")
+                print(f"iterations {i+1}/{budget}: size={value:.4f}, "
+                      f"Elapsed time: {elapsed:.1f}s, Estimated remaining: {remaining:.1f}s")
                 
         except Exception as e:
-            print(f"  错误 (迭代 {i+1}): {str(e)}")
+            print(f"ERROR (iteration {i+1}): {str(e)}")
             # 记录错误，但继续优化
             optimization_history['values'].append(float('inf'))
             continue
@@ -239,7 +272,7 @@ def optimize_beam(config, algorithm='NGOpt', budget=50, num_workers=1, device_ty
         
         # 验证最佳尺寸
         if best_size is None or np.isinf(best_size) or np.isnan(best_size):
-            print("  警告: 优化器返回无效的最佳尺寸，回退到观察到的最小值")
+            print("WARNING: Optimizer returned an invalid optimal size; falling back to the observed minimum.")
             valid_values = [v for v in optimization_history['values'] if not np.isinf(v) and not np.isnan(v)]
             if valid_values:
                 best_size = min(valid_values)
@@ -247,27 +280,27 @@ def optimize_beam(config, algorithm='NGOpt', budget=50, num_workers=1, device_ty
                 min_idx = optimization_history['values'].index(best_size)
                 best_params = optimization_history['parameters'][min_idx]
             else:
-                print("  警告: 未找到有效值，使用初始参数")
-                best_params = initial_values.copy()
+                print("WARNING: No valid values found; using initial parameters.")
+                best_params = current_values.copy()
                 best_size = initial_size
     except Exception as e:
-        print(f"  错误 (获取推荐): {str(e)}")
-        print("  回退到观察到的最佳值")
+        print(f"ERROR (getting recommendation):{str(e)}")
+        print("Falling back to the observed best value.")
         valid_indices = [(i, v) for i, v in enumerate(optimization_history['values']) 
                          if not np.isinf(v) and not np.isnan(v)]
         if valid_indices:
             min_idx, best_size = min(valid_indices, key=lambda x: x[1])
             best_params = optimization_history['parameters'][min_idx]
         else:
-            best_params = initial_values.copy()
+            best_params = current_values.copy()
             best_size = initial_size
     
     # 安全设置最佳参数
-    print("\n设置最佳参数 (安全检查中)...")
+    print("\nSetting optimal parameters (safety check in progress)...")
     try:
         safe_device_operation(device_pvs, best_params, config['safety'])
     except Exception as e:
-        print(f"  错误 (设置最佳参数): {str(e)}")
+        print(f"ERROR (setting optimal parameters): {str(e)}")
     
     # 添加最终结果到历史
     optimization_history['best_params'] = best_params.copy()
@@ -306,7 +339,6 @@ def save_results(optimization_history, config, filename=None):
         "improvement_percent": ((optimization_history['initial_size'] - optimization_history['best_value']) / optimization_history['initial_size']) * 100 if optimization_history['initial_size'] > 0 else 0,
         "algorithm": optimization_history['algorithm'],
         "budget": optimization_history['budget'],
-        "num_workers": optimization_history['num_workers'],
         "iterations": len(optimization_history['iterations']),
         "optimization_summary": {
             "total_iterations": len(optimization_history['iterations']),
@@ -332,7 +364,6 @@ def save_results(optimization_history, config, filename=None):
         "device_pvs": optimization_history['device_pvs'],
         "algorithm": optimization_history['algorithm'],
         "budget": optimization_history['budget'],
-        "num_workers": optimization_history['num_workers'],
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         "convergence_data": {
             "iteration": optimization_history['iterations'],
@@ -358,28 +389,28 @@ if __name__ == "__main__":
     config = load_config()
     
     # 打印配置摘要
-    print("=== 束流优化配置 ===")
-    print(f"相机: {config['camera']['pv']}")
-    print("可用设备:")
+    print("=== Beam Optimization Configuration ===")
+    print(f"Camera: {config['camera']['pv']}")
+    print("Available devices:")
     total_devices = 0
     for device_type, devices in config['devices'].items():
         print(f"  {device_type}: {len(devices)} 个设备")
         total_devices += len(devices)
-    print(f"总设备数: {total_devices}")
+    print(f"Total available devices: {total_devices}")
     print("=====================")
     
     # 检查束流状态
-    print("\n检查束流状态...")
+    print("\nChecking beam status...")
     if not wait_for_stable_beam(
         timeout=30,
         spark_pv=config['safety']['spark_pv'],
         beam_status_pv=config['safety']['beam_status_pv']
     ):
-        print("错误: 束流状态不稳定，无法继续优化。")
+        print("ERROR: Cannot proceed with unstable beam conditions.")
         exit(1)
     
     # 执行优化 - 直接在代码中指定算法和预算
-    print("\n开始优化...")
+    print("\nStarting optimization...")
     start_time = time.time()
     
     try:
@@ -388,46 +419,45 @@ if __name__ == "__main__":
             config,
             algorithm='NGOpt',    # 使用自适应元优化器
             budget=100,           # 100次迭代
-            num_workers=1,        # 顺序执行，不能并行，这是不要改
-            device_types=['quadrupoles', 'correctors']
+            device_types=['quadrupoles', 'correctors'],
         )
         elapsed_time = time.time() - start_time
         
-        print(f"\n优化完成，总耗时: {elapsed_time:.2f} 秒")
+        print(f"\nOptimization completed. Total time elapsed: {elapsed_time:.2f} seconds")
         
         # 检查初始尺寸
         initial_size = history['initial_size']
         if initial_size is None or np.isinf(initial_size) or np.isnan(initial_size):
             initial_size = float('inf')
-            print("警告: 无效的初始束流尺寸")
+            print("WARNING: Invalid initial beam size")
         
         # 检查最佳尺寸
         if best_size is None or np.isinf(best_size) or np.isnan(best_size):
-            print("警告: 无效的最佳束流尺寸，使用回退值")
+            print("WARNING: Invalid optimal beam size; using fallback value.")
             valid_values = [v for v in history['values'] if not np.isinf(v) and not np.isnan(v)]
             best_size = min(valid_values) if valid_values else float('inf')
         
-        print(f"初始束流尺寸: {initial_size:.4f}")
-        print(f"最佳束流尺寸: {best_size:.4f}")
+        print(f"Initial beam size: {initial_size:.4f}")
+        print(f"Best bema size: {best_size:.4f}")
         
         # 计算改进百分比，避免除以零
         if initial_size > 0 and not np.isinf(initial_size):
             improvement = (initial_size - best_size) / initial_size * 100
-            print(f"改进百分比: {improvement:.2f}%")
+            print(f"Improvement percentage: {improvement:.2f}%")
         else:
-            print("无法计算改进百分比")
+            print("Unable to calculate improvement percentage.")
         
         # 打印最优参数
-        print("最佳参数:")
+        print("Optimal parameters:")
         for pv, param, init_val in zip(device_pvs, best_params, history['initial_values']):
-            print(f"  {pv}: 初始={init_val:.4f}, 最佳={param:.4f}, 变化={param-init_val:.4f}")
+            print(f"  {pv}: Initial={init_val:.4f}, Best={param:.4f}, Change={param-init_val:.4f}")
         
         # 保存结果
         main_result_file, history_file = save_results(history, config)
         
     except Exception as e:
-        print(f"\n严重错误: {str(e)}")
-        print("保存部分结果...")
+        print(f"\nCritical ERROR:{str(e)}")
+        print("Saving partial results...")
         # 保存部分历史记录
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         error_filename = f"error_{timestamp}.json"
@@ -437,19 +467,19 @@ if __name__ == "__main__":
                 'timestamp': timestamp,
                 'traceback': traceback.format_exc() if hasattr(traceback, 'format_exc') else '无法获取详细跟踪信息'
             }, f, indent=2)
-        print(f"错误详情保存至: {error_filename}")
+        print(f"ERROR details saved to: {error_filename}")
         exit(1)
     
     # 重置相机增益
-    print("\n重置相机增益至 0...")
+    print("\nResetting camera gain to 0...")
     try:
         if 'caput' in globals():
             caput(config['camera']['gain_pv'], 0)
     except Exception as e:
-        print(f"警告: 重置相机增益失败: {str(e)}")
+        print(f"WARNING: Failed to reset camera gain: {str(e)}")
     
     # 提供绘图建议
-    print("\n可视化优化进度，请使用历史文件:")
+    print("\nTo visualize optimization progress, please use the history file:")
     print(f"python plot_optimization_history.py {history_file}")
     
-    print("\n优化完成!")
+    print("\nOptimization completed!")

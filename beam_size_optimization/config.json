@@ -9,98 +9,77 @@
     "quadrupoles": [
       {
         "pv": "LA-PS:Q49:SETI",
-        "range": [-0.8, 0.8],
-        "init": 0.0
+        "range": [-0.8, 0.8]
       },
       {
         "pv": "LA-PS:Q50:SETI",
-        "range": [-0.8, 0.8],
-        "init": 0.0
+        "range": [-0.8, 0.8]
       }
     ],
     "correctors": [
       {
         "pv": "LA-PS:C31:HSET",
-        "range": [-0.3, 0.3],
-        "init": 0.0
+        "range": [-0.3, 0.3]
       },
       {
         "pv": "LA-PS:C31:VSET",
-        "range": [-0.3, 0.3],
-        "init": 0.0
+        "range": [-0.3, 0.3]
       },
       {
         "pv": "LA-PS:C32:HSET",
-        "range": [-0.3, 0.3],
-        "init": 0.0
+        "range": [-0.3, 0.3]
       },
       {
         "pv": "LA-PS:C32:VSET",
-        "range": [-0.3, 0.3],
-        "init": 0.0
+        "range": [-0.3, 0.3]
       }
     ],
     "phaseshifters": [
       {
         "pv": "LA-RF:KLY1:SET_PHASE",
-        "range": [-2.0, 2.0],
-        "init": 0.0
+        "range": [-2.0, 2.0]
       },
       {
         "pv": "LA-RF:KLY3:SET_PHASE",
-        "range": [-2.0, 2.0],
-        "init": 0.0
+        "range": [-2.0, 2.0]
       }
     ],
     "amplifiers": [
       {
         "pv": "LA-RF:KLY1:SET_AMP",
-        "range": [-0.5, 0.5],
-        "init": 0.0
+        "range": [-0.5, 0.5]
       },
       {
         "pv": "LA-RF:KLY3:SET_AMP",
-        "range": [-0.5, 0.5],
-        "init": 0.0
+        "range": [-0.5, 0.5]
       }
     ],
     "others": [
       {
         "pv": "LA-CN:MOD_16:WRITE_V",
-        "range": [-0.5, 0.5],
-        "init": 0.0
+        "range": [-0.5, 0.5]
       },
       {
         "pv": "PIL:SMC2:pa_a1",
-        "range": [-0.2, 0.2],
-        "init": 0.0
+        "range": [-0.2, 0.2]
       },
       {
         "pv": "SBP-UD:IVU01:UN_Gap_Setting",
-        "range": [-0.05, 0.05],
-        "init": 0.0
+        "range": [-0.05, 0.05]
       },
       {
         "pv": "SBP-UD:IVU02:UN_Gap_Setting",
-        "range": [-0.05, 0.05],
-        "init": 0.0
+        "range": [-0.05, 0.05]
       },
       {
         "pv": "SBP-UD:IVU03:UN_Gap_Setting",
-        "range": [-0.05, 0.05],
-        "init": 0.0
+        "range": [-0.05, 0.05]
       }
     ]
   },
   "safety": {
     "spark_pv": "IN-MW:KLY3:GET_INTERLOCK_STATE",
     "beam_status_pv": "LA-CN:BEAM:STATUS"
-  },
-  "optimization": {
-    "algorithm": "TBPSA",
-    "iterations": 200,
-    "avg_measurements": 3,
-    "timeout": 600
   },
   "image_processing": {
     "denoising_sigma": 1.0,
