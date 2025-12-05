@@ -24,35 +24,29 @@ def create_verification_config():
             "quadrupoles": [
                 {
                     "pv": "LA-PS:Q49:SETI",
-                    "range": [-0.8, 0.8],
-                    "init": 0.0
+                    "range": [-0.8, 0.8]
                 },
                 {
                     "pv": "LA-PS:Q50:SETI",
-                    "range": [-0.8, 0.8],
-                    "init": 0.0
+                    "range": [-0.8, 0.8]
                 }
             ],
             "correctors": [
                 {
                     "pv": "LA-PS:C31:HSET",
                     "range": [-0.3, 0.3],
-                    "init": 0.0
                 },
                 {
                     "pv": "LA-PS:C31:VSET",
-                    "range": [-0.3, 0.3],
-                    "init": 0.0
+                    "range": [-0.3, 0.3]
                 },
                 {
                     "pv": "LA-PS:C32:HSET",
-                    "range": [-0.3, 0.3],
-                    "init": 0.0
+                    "range": [-0.3, 0.3]
                 },
                 {
                     "pv": "LA-PS:C32:VSET",
-                    "range": [-0.3, 0.3],
-                    "init": 0.0
+                    "range": [-0.3, 0.3]
                 }
             ]
         },

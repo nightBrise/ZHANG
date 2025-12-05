@@ -31,14 +31,14 @@ class EPICSSimulator:
         self.pv_values['LA-CN:BEAM:STATUS'] = 1  # 1表示束流到达末端
         
         # 四极磁铁默认值
-        self.pv_values['LA-PS:Q49:SETI'] = 0.0
-        self.pv_values['LA-PS:Q50:SETI'] = 0.0
+        self.pv_values['LA-PS:Q49:SETI'] = np.random.uniform(-0.8, 0.8)
+        self.pv_values['LA-PS:Q50:SETI'] = np.random.uniform(-0.8, 0.8)
         
         # 校正子默认值
-        self.pv_values['LA-PS:C31:HSET'] = 0.0
-        self.pv_values['LA-PS:C31:VSET'] = 0.0
-        self.pv_values['LA-PS:C32:HSET'] = 0.0
-        self.pv_values['LA-PS:C32:VSET'] = 0.0
+        self.pv_values['LA-PS:C31:HSET'] = np.random.uniform(-0.3, 0.3)
+        self.pv_values['LA-PS:C31:VSET'] = np.random.uniform(-0.3, 0.3)
+        self.pv_values['LA-PS:C32:HSET'] = np.random.uniform(-0.3, 0.3)
+        self.pv_values['LA-PS:C32:VSET'] = np.random.uniform(-0.3, 0.3)
         
         # 相位和幅度默认值
         self.pv_values['LA-RF:KLY1:SET_PHASE'] = 0.0
@@ -62,10 +62,10 @@ class EPICSSimulator:
     
     def _generate_beam_image(self, params, shape=(128, 128)):
         """
-        生成模拟束流图像
+        生成物理上更真实的模拟束流图像
         
         Args:
-            params: 设备参数字典
+            params: 设备参数字典，包含四极磁铁和校正子设置
             shape: 图像尺寸 (height, width)
             
         Returns:
@@ -74,92 +74,183 @@ class EPICSSimulator:
         height, width = shape
         img = np.zeros(shape, dtype=np.float32)
         
-        # 从参数中提取相关值
+        # 从参数中提取四极磁铁和校正子值
         quad_values = []
         corr_values = []
         
-        # 提取四极磁铁和校正子值
-        for i in range(6):  # 假设最多6个设备
+        # 提取四极磁铁值 (前两个参数)
+        for i in range(2):
             key = f'x{i}'
             if key in params:
-                if i < 2:  # 前两个是四极磁铁
-                    quad_values.append(params[key])
-                else:  # 后面是校正子
-                    corr_values.append(params[key])
+                quad_values.append(params[key])
+            else:
+                quad_values.append(0.0)  # 默认值
         
-        # 默认值
-        if not quad_values:
-            quad_values = [0.0, 0.0]
-        if not corr_values:
-            corr_values = [0.0, 0.0, 0.0, 0.0]
+        # 提取校正子值 (接下来的四个参数)
+        for i in range(2, 6):
+            key = f'x{i}'
+            if key in params:
+                corr_values.append(params[key])
+            else:
+                corr_values.append(0.0)  # 默认值
         
-        # 计算束流位置和大小
-        # 四极磁铁影响束流大小，校正子影响束流位置
+        # 确保有正确的参数数量
+        while len(quad_values) < 2:
+            quad_values.append(0.0)
+        while len(corr_values) < 4:
+            corr_values.append(0.0)
+        
+        # --- 束流物理模型 ---
+        
+        # 1. 基础束流参数
+        base_size = min(height, width) * 0.08  # 基础束流大小，约占图像的8%
+        base_intensity = 8000  # 基础强度
+        
+        # 2. 计算束流中心位置 (受校正子影响)
+        # 校正子的物理模型：偏转角度与电流成正比，位置偏移与偏转角度和距离成正比
         x_center = width // 2
         y_center = height // 2
         
-        # 束流位置受校正子影响
-        if len(corr_values) > 0:
-            x_center += int(corr_values[0] * width * 0.2)  # 水平校正子
-        if len(corr_values) > 1:
-            y_center += int(corr_values[1] * height * 0.2)  # 垂直校正子
+        # 水平和垂直校正子对束流位置的影响
+        # 假设前两个校正子(C31)直接影响当前位置
+        # 后两个校正子(C32)影响力矩，产生更复杂的效果
+        x_shift = (
+            corr_values[0] * width * 0.15 +  # C31水平校正子直接影响
+            corr_values[2] * corr_values[0] * width * 0.05  # C32与C31耦合效应
+        )
+        y_shift = (
+            corr_values[1] * height * 0.15 +  # C31垂直校正子直接影响
+            corr_values[3] * corr_values[1] * height * 0.05  # C32与C31耦合效应
+        )
         
-        # 限制在图像范围内
-        x_center = max(10, min(x_center, width - 10))
-        y_center = max(10, min(y_center, height - 10))
+        # 应用位置偏移
+        x_center += int(x_shift)
+        y_center += int(y_shift)
         
-        # 束流大小受四极磁铁影响
-        # 简单模型：束流大小与四极磁铁电流的平方成正比
-        beam_size_base = 15
-        if len(quad_values) > 0:
-            beam_size_x = beam_size_base + abs(quad_values[0]) * 10
-        else:
-            beam_size_x = beam_size_base
-            
-        if len(quad_values) > 1:
-            beam_size_y = beam_size_base + abs(quad_values[1]) * 10
-        else:
-            beam_size_y = beam_size_base
+        # 限制在图像范围内，保留边界
+        border = max(5, min(height, width) // 20)
+        x_center = max(border, min(x_center, width - border))
+        y_center = max(border, min(y_center, height - border))
         
-        # 限制束流大小
-        max_beam_size = min(height, width) // 4
-        beam_size_x = max(5, min(beam_size_x, max_beam_size))
-        beam_size_y = max(5, min(beam_size_y, max_beam_size))
+        # 3. 计算束流尺寸 (受四极磁铁影响)
+        # 物理模型：四极磁铁产生聚焦/散焦作用，取决于极性和强度
+        # Q49 (第一个四极磁铁) 主要影响水平方向
+        # Q50 (第二个四极磁铁) 主要影响垂直方向
+        # 考虑四极磁铁的非线性效应和饱和
         
-        # 生成2D高斯束流
-        y, x = np.ogrid[:height, :width]
+        # 基础束流大小
+        beam_sigma_x = base_size
+        beam_sigma_y = base_size
         
-        # 椭圆高斯分布
-        gaussian = np.exp(-0.5 * (
-            ((x - x_center) ** 2) / (beam_size_x ** 2) + 
-            ((y - y_center) ** 2) / (beam_size_y ** 2)
+        # Q49对水平和垂直尺寸的非线性影响
+        q49_effect_x = 1.0 - 0.8 * np.tanh(quad_values[0] * 1.5)  # 聚焦效应
+        q49_effect_y = 1.0 + 0.6 * np.tanh(quad_values[0] * 1.2)  # 散焦效应
+        
+        # Q50对水平和垂直尺寸的非线性影响
+        q50_effect_x = 1.0 + 0.7 * np.tanh(quad_values[1] * 1.2)  # 散焦效应
+        q50_effect_y = 1.0 - 0.9 * np.tanh(quad_values[1] * 1.5)  # 聚焦效应
+        
+        # 应用四极磁铁效应
+        beam_sigma_x *= q49_effect_x * q50_effect_x
+        beam_sigma_y *= q49_effect_y * q50_effect_y
+        
+        # 4. 束流椭圆度和旋转 (额外的物理效应)
+        ellipticity = 1.0 + 0.3 * (quad_values[0] - quad_values[1])  # 椭圆度
+        rotation_angle = 0.1 * (quad_values[0] + quad_values[1])  # 旋转角度(弧度)
+        
+        # 5. 束流稳定性检查 - 当参数极端时，束流可能完全丢失
+        stability_factor = np.exp(-0.5 * (
+            (abs(quad_values[0]) / 1.5)**2 + 
+            (abs(quad_values[1]) / 1.5)**2 +
+            (abs(corr_values[0]) / 0.8)**2 +
+            (abs(corr_values[1]) / 0.8)**2
         ))
         
-        # 添加强度 - 使束流有合理的像素值
-        intensity = 10000  # 最大像素值
+        # 当束流偏移过大时，部分或全部丢失
+        edge_distance_x = min(x_center - border, width - x_center - border)
+        edge_distance_y = min(y_center - border, height - y_center - border)
+        edge_factor = min(1.0, edge_distance_x / (beam_sigma_x * 3), edge_distance_y / (beam_sigma_y * 3))
+        
+        # 应用稳定性因子
+        intensity = base_intensity * stability_factor * edge_factor
+        
+        # 6. 束流截断 - 当束流太大时，会被光阑截断
+        max_beam_size = min(height, width) // 3
+        beam_sigma_x = min(beam_sigma_x, max_beam_size)
+        beam_sigma_y = min(beam_sigma_y, max_beam_size)
+        
+        # 7. 生成2D高斯束流 (考虑椭圆度和旋转)
+        y, x = np.ogrid[:height, :width]
+        x_rel = x - x_center
+        y_rel = y - y_center
+        
+        # 应用旋转
+        x_rot = x_rel * np.cos(rotation_angle) - y_rel * np.sin(rotation_angle)
+        y_rot = x_rel * np.sin(rotation_angle) + y_rel * np.cos(rotation_angle)
+        
+        # 应用椭圆度 (调整y方向sigma)
+        beam_sigma_y_eff = beam_sigma_y * ellipticity
+        
+        # 2D高斯分布，考虑椭圆度和旋转
+        gaussian = np.exp(-0.5 * (
+            (x_rot**2) / (beam_sigma_x**2) + 
+            (y_rot**2) / (beam_sigma_y_eff**2)
+        ))
+        
+        # 8. 添加非高斯尾部 (更真实的束流分布)
+        tail_factor = 0.15  # 尾部贡献比例
+        tail_gaussian = np.exp(-0.15 * (
+            (x_rot**2) / (beam_sigma_x**2) + 
+            (y_rot**2) / (beam_sigma_y_eff**2)
+        ))
+        gaussian = (1 - tail_factor) * gaussian + tail_factor * tail_gaussian
+        
+        # 9. 应用强度
         img = gaussian * intensity
         
-        # 添加背景噪声
+        # 10. 添加背景噪声和相机效应
         if self.noise_level > 0:
-            noise = np.random.normal(0, self.noise_level * intensity * 0.1, shape)
-            img += noise
+            # 背景噪声 (泊松分布更符合物理)
+            background_level = 20 * self.noise_level
+            background = np.random.poisson(background_level, shape).astype(np.float32)
+            
+            # 读出噪声 (高斯分布)
+            readout_noise = np.random.normal(0, 5 * self.noise_level, shape)
+            
+            img += background + readout_noise
             img = np.maximum(img, 0)  # 确保没有负值
         
-        # 5%的概率添加随机"火花"噪声
-        if self.random_state.random() < 0.05:
-            spark_x = self.random_state.randint(0, width)
-            spark_y = self.random_state.randint(0, height)
-            spark_size = self.random_state.randint(3, 15)
-            spark_intensity = self.random_state.randint(intensity // 2, intensity * 2)
-            
-            # 创建火花区域
-            spark_y_mask, spark_x_mask = np.ogrid[:height, :width]
-            spark_mask = ((spark_x_mask - spark_x) ** 2 + (spark_y_mask - spark_y)**2) < spark_size ** 2
-            img[spark_mask] = spark_intensity
+        # 11. 模拟火花效应 (更真实的火花模型)
+        if self.random_state.random() < self.spark_probability * 3:  # 火花概率提升
+            for _ in range(self.random_state.randint(1, 4)):  # 1-3个火花
+                spark_x = self.random_state.randint(max(0, x_center-30), min(width, x_center+30))
+                spark_y = self.random_state.randint(max(0, y_center-30), min(height, y_center+30))
+                spark_size = self.random_state.uniform(2, 8)
+                spark_intensity = self.random_state.uniform(intensity * 0.3, intensity * 1.5)
+                
+                # 创建更真实的火花形状 (指数衰减)
+                spark_y_mask, spark_x_mask = np.ogrid[:height, :width]
+                distance = np.sqrt((spark_x_mask - spark_x)**2 + (spark_y_mask - spark_y)**2)
+                spark_profile = spark_intensity * np.exp(-distance / spark_size)
+                img += spark_profile
         
-        # 10%的概率模拟相机故障
-        if self.random_state.random() < 0.1:
-            img = np.zeros_like(img)
+        # 12. 模拟束流失锁 (20%概率)
+        if self.random_state.random() < self.beam_loss_probability * 5:  # 提高束流失锁概率
+            if self.random_state.random() < 0.7:  # 70%部分丢失
+                # 随机掩码部分束流
+                mask_x = self.random_state.randint(0, width)
+                mask_y = self.random_state.randint(0, height)
+                mask_radius = self.random_state.randint(10, 40)
+                
+                y_mask, x_mask = np.ogrid[:height, :width]
+                mask = ((x_mask - mask_x)**2 + (y_mask - mask_y)**2) > mask_radius**2
+                img *= mask
+            else:  # 30%完全丢失
+                img = np.zeros_like(img)
+        
+        # 13. 相机饱和效应
+        saturation_level = 16000  # 16位相机的典型饱和值
+        img = np.minimum(img, saturation_level)
         
         return img
     
