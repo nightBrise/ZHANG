@@ -3,7 +3,15 @@
     "pv": "LA-BI:PRF29:RAW:ArrayData",
     "shape": [1392, 1040],
     "gain_pv": "LA-BI:PRF29:CAM:GainRaw",
-    "gain_range": [0, 500]
+    "gain_range": [0, 500],
+    "refresh_rate": 10
+  },
+  "image_processing": {
+    "denoising_sigma": 1.0,
+    "beam_threshold_percent": 10,
+    "use_gaussian_fit": false,
+    "num_averages": 1,
+    "spot_threshold_percent": 10
   },
   "devices": {
     "quadrupoles": [
@@ -80,10 +88,5 @@
   "safety": {
     "spark_pv": "IN-MW:KLY3:GET_INTERLOCK_STATE",
     "beam_status_pv": "LA-CN:BEAM:STATUS"
-  },
-  "image_processing": {
-    "denoising_sigma": 1.0,
-    "beam_threshold_percent": 10,
-    "use_gaussian_fit": false
   }
 }
