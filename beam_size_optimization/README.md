@@ -134,10 +134,6 @@ pip install epics         # 完整EPICS环境
         "range": [-0.05, 0.05]
       }
     ]
-  },
-  "safety": {
-    "spark_pv": "IN-MW:KLY3:GET_INTERLOCK_STATE",
-    "beam_status_pv": "LA-CN:BEAM:STATUS"
   }
 }
 ```
@@ -170,11 +166,8 @@ pip install epics         # 完整EPICS环境
    - `pv`: 设备控制PV
    - `range`: 允许参数范围 `[下限, 上限]`
 
-4. **Safety (安全设置)**
-   - `spark_pv`: 火花检测PV（值=1表示正常，其他值表示有火花）
-   - `beam_status_pv`: 束流状态PV（值=1表示束流到达末端）
-
 ## 运行优化脚本
+运行脚本时，系统将检查所有设备是否处于安全状态，并确保所有设备参数在允许范围内。
 
 ### 基本用法
 ```bash
