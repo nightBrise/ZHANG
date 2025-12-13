@@ -11,17 +11,17 @@ import nevergrad as ng
 import os
 import json
 import traceback
+import matplotlib.pyplot as plt
 from utilities import (
     load_config,
     select_optimization_devices,
     safe_device_operation,
     save_optimization_results,
-    reset_camera_gain,
     print_config_summary,
-    objective_function,
-    create_optimizer,
     optimize_beam,
-    confirm_apply_optimization
+    confirm_apply_optimization,
+    _save_hdf5_results,
+    get_current_values
 )
 
 
@@ -40,7 +40,7 @@ def main():
         print("\n选择优化设备...")
         device_pvs, initial_values, _ = select_optimization_devices(
             config,
-            device_types=['quadrupoles', 'correctors']
+            device_types=['quadrupoles']
         )
         
         # 保存原始参数值
@@ -51,29 +51,33 @@ def main():
         print("\n开始优化过程...")
         start_time = time.time()
         
-        best_params, best_size, device_pvs, history = optimize_beam(
+        best_params, best_score, device_pvs, history = optimize_beam(
             config,
-            algorithm='NGOpt',    # 使用自适应元优化器
-            budget=100,           # 100次迭代
-            device_types=['quadrupoles', 'correctors'],
-            use_secondary_objectives=False
+            algorithm=config['optimization'].get('algorithm'),
+            budget=config['optimization'].get('budget'),
+            device_types=['quadrupoles'],
         )
         
         elapsed_time = time.time() - start_time
         print(f"\n优化完成。总耗时: {elapsed_time:.2f} 秒")
         
         # 4. 计算并显示改进百分比
-        initial_size = history['initial_size']
+        initial_physical_size = history['initial_physical_size']
+        best_physical_size = history['best_physical_size']
         print(f"\n优化结果摘要:")
         print("-"*40)
-        print(f"初始束流尺寸: {initial_size:.4f}")
-        print(f"最佳束流尺寸: {best_size:.4f}")
+        print(f"初始束流尺寸: {initial_physical_size:.4f}")
+        print(f"最佳束流尺寸: {best_physical_size:.4f}")
+        print(f"初始圆度: {history['initial_roundness']:.4f}")
+        print(f"最佳圆度: {history['best_roundness']:.4f}")
+        print(f"初始综合评分: {history['initial_score']:.4f}")
+        print(f"最佳综合评分: {best_score:.4f}")
         
-        if initial_size > 0 and not np.isinf(initial_size):
-            improvement = (initial_size - best_size) / initial_size * 100
-            print(f"改进百分比: {improvement:.2f}%")
+        if initial_physical_size > 0 and not np.isinf(initial_physical_size):
+            improvement = ((initial_physical_size - best_physical_size) / initial_physical_size) * 100
+            print(f"尺寸改进百分比: {improvement:.2f}%")
         else:
-            print("无法计算改进百分比。")
+            print("无法计算尺寸改进百分比。")
         
         # 5. 询问用户是否应用优化结果
         apply_optimization = confirm_apply_optimization(best_params, device_pvs, original_params)
@@ -89,31 +93,44 @@ def main():
             print("\n恢复原始参数到设备...")
             if safe_device_operation(device_pvs, original_params, config):
                 print("✓ 原始参数已成功恢复到设备")
+                # 验证恢复结果
+                current_values = get_current_values(device_pvs)
+                for pv, orig_val, curr_val in zip(device_pvs, original_params, current_values):
+                    if curr_val is not None and abs(curr_val - orig_val) > 1e-3:
+                        print(f"⚠️  警告: {pv} 未完全恢复 (原始: {orig_val:.4f}, 当前: {curr_val:.4f})")
             else:
                 print("✗ 恢复原始参数失败")
         
         # 6. 保存优化结果（无论是否应用）
         print("\n保存优化结果...")
-        main_result_file, history_file = save_optimization_results(history, config)
-        print(f"✓ 主结果文件: {main_result_file}")
-        print(f"✓ 历史记录文件: {history_file}")
+        main_result_file = save_optimization_results(history, config)
+        print(f"✓ 优化结果已保存至: {main_result_file}")
         
-        # 7. 重置相机增益
-        print("\n重置相机增益到0...")
-        reset_camera_gain(config['camera']['gain_pv'], target_value=0)
-        
-        # 8. 提供可视化建议
+        # 7. 提供可视化建议
         print("\n" + "="*50)
         print("优化完成!")
         print("="*50)
-        print(f"\n要可视化优化过程，请使用历史文件:")
-        print(f"python plot_optimization_history.py {history_file}")
+        print(f"\n要可视化优化过程，请使用结果文件:")
+        print(f"python visualization.py {main_result_file}")
+        print(f"\n或者使用图形界面查看:")
+        print(f"python gui_results.py {main_result_file}")
         print("\n优化报告文件:")
         print(f"{main_result_file}")
         
     except Exception as e:
         print(f"\n严重错误: {str(e)}")
         print("保存部分结果...")
+        
+        # 尝试保存历史记录（如果有的话）
+        if 'history' in locals() and history is not None:
+            try:
+                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                error_filename = f"partial_results_{timestamp}.h5"
+                _save_hdf5_results(error_filename, history, config)
+                print(f"部分优化结果已保存至: {error_filename}")
+            except:
+                pass
+        
         # 保存错误信息
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         error_filename = f"error_{timestamp}.json"

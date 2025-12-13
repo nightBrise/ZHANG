@@ -1,45 +1,79 @@
 {
   "camera": {
-    "pv": "LA-BI:PRF29:RAW:ArrayData",
+    "pv": "LA-BI:PRF22:RAW:ArrayData",
     "shape": [1392, 1040],
-    "gain_pv": "LA-BI:PRF29:CAM:GainRaw",
-    "gain_range": [0, 500],
-    "refresh_rate": 10
+    "gain_pv": "LA-BI:PRF22:CAM:GainRaw",
+    "gain_range": [0, 500]
   },
   "image_processing": {
-    "denoising_sigma": 1.0,
-    "beam_threshold_percent": 10,
-    "use_gaussian_fit": false,
-    "num_averages": 1,
-    "spot_threshold_percent": 10
+    "num_averages": 3
   },
+  "optimization": {
+      "algorithm": "Compass",
+      "budget": 50,
+      "early_stopping": {
+          "enabled": true,
+          "patience": 10,
+          "min_relative_improvement": 0.005
+      }
+  },
+  "target_diagonal_size_pixels": 0,
+  "maintain_position": true,
   "devices": {
     "quadrupoles": [
-      {
-        "pv": "LA-PS:Q49:SETI",
-        "range": [-0.8, 0.8]
+     {
+        "pv": "LA-PS:Q34:SETI",
+        "range": [-1.04, -0.04]
+      },
+     {
+        "pv": "LA-PS:Q35:SETI",
+        "range": [-1.04, -0.04]
+      },
+     {
+        "pv": "LA-PS:Q36:SETI",
+        "range": [0.360, 1.360]
+      },
+     {
+        "pv": "LA-PS:Q37:SETI",
+        "range": [-1.450, -0.450]
+      },
+     {
+        "pv": "LA-PS:Q38:SETI",
+        "range": [0.390, 1.390]
       },
       {
-        "pv": "LA-PS:Q50:SETI",
-        "range": [-0.8, 0.8]
+        "pv": "LA-PS:Q39:SETI",
+        "range": [-1.41, -0.41]
+      },
+      {
+        "pv": "LA-PS:Q40:SETI",
+        "range": [0.43, 1.43]
       }
     ],
     "correctors": [
       {
-        "pv": "LA-PS:C31:HSET",
+        "pv": "LA-PS:CH20:SETI",
+        "range": [-0.39, 0.29]
+      },
+      {
+        "pv": "LA-PS:CV20:SETI",
+        "range": [-0.29, 0.39]
+      },
+      {
+        "pv": "LA-PS:CH21:SETI",
+        "range": [0.23, 0.83]
+      },
+      {
+        "pv": "LA-PS:CV21:SETI",
         "range": [-0.3, 0.3]
       },
       {
-        "pv": "LA-PS:C31:VSET",
-        "range": [-0.3, 0.3]
+        "pv": "LA-PS:CH22:SETI",
+        "range": [0.26, 0.86]
       },
       {
-        "pv": "LA-PS:C32:HSET",
-        "range": [-0.3, 0.3]
-      },
-      {
-        "pv": "LA-PS:C32:VSET",
-        "range": [-0.3, 0.3]
+        "pv": "LA-PS:CV22:SETI",
+        "range": [0.080, 0.680]
       }
     ],
     "phaseshifters": [
